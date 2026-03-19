@@ -92,12 +92,13 @@ def remove_background(input_path, output_path):
 
 
 # ── USO ───────────────────────────────────────────────────────────────────────
-input_dir  = "uploads"
-output_dir = "outputs"
-os.makedirs(output_dir, exist_ok=True)
+if __name__ == "__main__":
+    input_dir  = "uploads"
+    output_dir = "outputs"
+    os.makedirs(output_dir, exist_ok=True)
 
-files = [f for f in os.listdir(input_dir) if f.endswith('.png')]
-for fname in files:
-    inp = os.path.join(input_dir, fname)
-    out = os.path.join(output_dir, fname)
-    remove_background(inp, out)
+    files = [f for f in os.listdir(input_dir) if f.endswith('.png')]
+    for fname in files:
+        inp = os.path.join(input_dir, fname)
+        out = os.path.join(output_dir, fname)
+        remove_background(inp, out)

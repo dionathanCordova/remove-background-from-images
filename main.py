@@ -3,6 +3,11 @@ import numpy as np
 import os
 
 def estimate_background_color(bgr, border_size=20):
+    """Estima a cor do fundo amostrando a borda da imagem.
+
+    Retorna np.ndarray shape=(3,) dtype=float32 em ordem BGR.
+    Se a borda tiver alta variância (fundo quadriculado), retorna branco.
+    """
     top    = bgr[:border_size, :].reshape(-1, 3)
     bottom = bgr[-border_size:, :].reshape(-1, 3)
     left   = bgr[:, :border_size, :].reshape(-1, 3)

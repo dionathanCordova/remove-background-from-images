@@ -38,7 +38,8 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
     Retorno: uint8 (H,W), valores 0–255.
     """
     h, w = bgr.shape[:2]
-    assert coarse_mask.max() <= 1, "coarse_mask must contain values 0/1, not 0/255"
+    if coarse_mask.max() > 1:
+        raise ValueError("coarse_mask must contain values 0/1, not 0/255")
 
     # Guarda: sem foreground detectado
     if not np.any(coarse_mask):

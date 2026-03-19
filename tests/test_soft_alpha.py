@@ -1,7 +1,8 @@
+import cv2
 import numpy as np
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from main import estimate_background_color
+from main import estimate_background_color, compute_soft_alpha
 
 
 def make_solid_image(h, w, bgr_color):
@@ -54,10 +55,6 @@ def test_returns_shape_3():
     img = make_solid_image(100, 100, (100, 100, 100))
     result = estimate_background_color(img)
     assert result.shape == (3,)
-
-
-import cv2
-from main import compute_soft_alpha
 
 
 def make_test_inputs(h=100, w=100, bg_color=(255, 255, 255)):
@@ -148,3 +145,22 @@ def test_returns_correct_shape():
     coarse_mask[30:50, 50:70] = 1
     result = compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg)
     assert result.shape == (80, 120)
+
+
+def test_colored_background_branch_non_zero_alpha():
+    """Fundo escuro (não branco) usa fórmula Euclidiana — pixel diferente do fundo fica opaco."""
+    h, w = 60, 60
+    dark_bg = (30, 30, 30)
+    bgr = np.full((h, w, 3), dark_bg, dtype=np.uint8)
+    # Pixel muito diferente do fundo escuro (cor brilhante)
+    bgr[30, 30] = (200, 100, 50)
+
+    coarse_mask = np.zeros((h, w), dtype=np.uint8)
+    coarse_mask[28:33, 28:33] = 1
+
+    definite_bg_mask = np.zeros((h, w), dtype=bool)
+    bg = np.array([30.0, 30.0, 30.0], dtype=np.float32)
+
+    result = compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg)
+    # Pixel bem diferente do fundo escuro deve ter alpha alto
+    assert result[30, 30] >= 100, f"Expected alpha >= 100, got {result[30, 30]}"

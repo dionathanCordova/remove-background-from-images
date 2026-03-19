@@ -38,6 +38,7 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
     Retorno: uint8 (H,W), valores 0–255.
     """
     h, w = bgr.shape[:2]
+    assert coarse_mask.max() <= 1, "coarse_mask must contain values 0/1, not 0/255"
 
     # Guarda: sem foreground detectado
     if not np.any(coarse_mask):
@@ -59,7 +60,7 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
     alpha_float = np.clip(alpha_float, 0.0, 1.0)
 
     # ── Passo 3: Montar alpha final ───────────────────────────────────────────
-    transition_mask = (~definite_bg_mask) & (definite_fg == 0)
+    transition_mask = (~definite_bg_mask) & (definite_fg == 0) & (coarse_mask > 0)
 
     final_alpha = np.zeros((h, w), dtype=np.float32)
     final_alpha[(definite_fg == 1) & (~definite_bg_mask)] = 1.0
@@ -75,6 +76,7 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
     frontier = cv2.dilate(frontier_binary.astype(np.uint8), kernel, iterations=1) > 0
 
     blurred = cv2.GaussianBlur(final_alpha, (3, 3), 0)
+    # Use maximum to preserve strong color signals (e.g. fire pixels) that blur would attenuate
     final_alpha[frontier] = np.maximum(blurred[frontier], alpha_float[frontier])
 
     # Restaura zonas certas

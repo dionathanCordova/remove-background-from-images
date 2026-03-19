@@ -20,6 +20,8 @@ def estimate_background_color(bgr, border_size=20):
         cv2.COLOR_BGR2GRAY
     ).flatten()
 
+    # Limiar 30: xadrez típico tem std ~127; fundo sólido ~0; gradiente suave ~10-20.
+    # Conservador: falsos positivos (gradiente) retornam branco, que é aceitável.
     if border_gray.std() > 30:
         return np.array([255.0, 255.0, 255.0], dtype=np.float32)
 

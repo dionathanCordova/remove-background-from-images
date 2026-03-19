@@ -26,6 +26,64 @@ def estimate_background_color(bgr, border_size=20):
     return np.median(border_pixels, axis=0).astype(np.float32)
 
 
+def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
+    """Gera canal alpha com semi-transparência para efeitos (fogo, névoa, glow).
+
+    Parâmetros:
+        bgr              : uint8  (H,W,3)  — imagem BGR
+        coarse_mask      : uint8  (H,W)    — máscara 0/1 pós-GrabCut+MORPH_OPEN
+        definite_bg_mask : bool   (H,W)    — True = fundo certo (flood fill)
+        bg_color         : float32 (3,)    — cor do fundo estimada, ordem BGR
+
+    Retorno: uint8 (H,W), valores 0–255.
+    """
+    h, w = bgr.shape[:2]
+
+    # Guarda: sem foreground detectado
+    if not np.any(coarse_mask):
+        return np.zeros((h, w), dtype=np.uint8)
+
+    # ── Passo 1: Trimap ──────────────────────────────────────────────────────
+    kernel = np.ones((3, 3), np.uint8)
+    definite_fg = cv2.erode(coarse_mask, kernel, iterations=3)  # uint8, 0/1
+
+    # ── Passo 2: Alpha na zona de transição ──────────────────────────────────
+    float_bgr = bgr.astype(np.float32)
+    diff = float_bgr - bg_color  # broadcast (3,) → (H,W,3); B=0, G=1, R=2
+
+    if np.all(bg_color > 230):
+        alpha_float = np.max(np.abs(diff), axis=2) / 255.0
+    else:
+        alpha_float = np.sqrt(np.sum(diff ** 2, axis=2)) / (np.sqrt(3.0) * 255.0)
+
+    alpha_float = np.clip(alpha_float, 0.0, 1.0)
+
+    # ── Passo 3: Montar alpha final ───────────────────────────────────────────
+    transition_mask = (~definite_bg_mask) & (definite_fg == 0)
+
+    final_alpha = np.zeros((h, w), dtype=np.float32)
+    final_alpha[(definite_fg == 1) & (~definite_bg_mask)] = 1.0
+    final_alpha[transition_mask] = alpha_float[transition_mask]
+    # definite_bg_mask permanece 0.0
+
+    # ── Passo 4: Suavização na fronteira ─────────────────────────────────────
+    coarse_u8 = coarse_mask.astype(np.uint8) * 255
+    dilated_fg = cv2.dilate(coarse_u8, kernel, iterations=2)
+    eroded_fg  = cv2.erode(coarse_u8,  kernel, iterations=2)
+    frontier_binary = ((dilated_fg.astype(np.int16) - eroded_fg.astype(np.int16)) > 0)
+
+    frontier = cv2.dilate(frontier_binary.astype(np.uint8), kernel, iterations=1) > 0
+
+    blurred = cv2.GaussianBlur(final_alpha, (3, 3), 0)
+    final_alpha[frontier] = np.maximum(blurred[frontier], alpha_float[frontier])
+
+    # Restaura zonas certas
+    final_alpha[definite_bg_mask] = 0.0
+    final_alpha[(definite_fg == 1) & (~definite_bg_mask)] = 1.0
+
+    return np.clip(final_alpha * 255.0, 0, 255).astype(np.uint8)
+
+
 def remove_background(input_path, output_path):
     img = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
     if img is None:

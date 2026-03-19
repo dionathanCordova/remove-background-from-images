@@ -2,6 +2,25 @@ import cv2
 import numpy as np
 import os
 
+def estimate_background_color(bgr, border_size=20):
+    top    = bgr[:border_size, :].reshape(-1, 3)
+    bottom = bgr[-border_size:, :].reshape(-1, 3)
+    left   = bgr[:, :border_size, :].reshape(-1, 3)
+    right  = bgr[:, -border_size:, :].reshape(-1, 3)
+
+    border_pixels = np.concatenate([top, bottom, left, right], axis=0)
+
+    border_gray = cv2.cvtColor(
+        border_pixels.reshape(1, -1, 3),
+        cv2.COLOR_BGR2GRAY
+    ).flatten()
+
+    if border_gray.std() > 30:
+        return np.array([255.0, 255.0, 255.0], dtype=np.float32)
+
+    return np.median(border_pixels, axis=0).astype(np.float32)
+
+
 def remove_background(input_path, output_path):
     img = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
     if img is None:

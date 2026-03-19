@@ -99,6 +99,9 @@ def remove_background(input_path, output_path):
     h, w = img.shape[:2]
     bgr = img[:, :, :3].copy()
 
+    # ── PASSO 0: Estimativa da cor do fundo ────────────────────────────────
+    bg_color = estimate_background_color(bgr)
+
     # ── PASSO 1: Máscara Inicial (Flood Fill + Brancos) ──────────────────────────
     # Criamos uma máscara inicial para "ajudar" o GrabCut
     mask_init = np.zeros((h, w), np.uint8)
@@ -139,13 +142,11 @@ def remove_background(input_path, output_path):
     # Máscara final: 0 e 2 são fundo, 1 e 3 são objeto
     mask_final = np.where((mask_init == 2) | (mask_init == 0), 0, 1).astype('uint8')
 
-    # ── PASSO 3: Refinamento de bordas ──────────────────────────────────────────
-    # Limpeza morfológica para remover ruídos
+    # ── PASSO 3: Alpha suave preservando efeitos semi-transparentes ─────────
     kernel = np.ones((3, 3), np.uint8)
     mask_final = cv2.morphologyEx(mask_final, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask_final = cv2.GaussianBlur(mask_final.astype(np.float32) * 255, (3, 3), 0)
-    
-    alpha = np.clip(mask_final, 0, 255).astype(np.uint8)
+
+    alpha = compute_soft_alpha(bgr, mask_final, bg_mask, bg_color)
 
     # Montagem do resultado
     result = bgr.copy()
@@ -153,7 +154,7 @@ def remove_background(input_path, output_path):
     result[:, :, 3] = alpha
 
     cv2.imwrite(output_path, result)
-    print(f"Saved (Improved): {os.path.basename(output_path)}")
+    print(f"Saved: {os.path.basename(output_path)}")
 
 
 # ── USO ───────────────────────────────────────────────────────────────────────

@@ -49,7 +49,9 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
 
     # ── Passo 1: Trimap ──────────────────────────────────────────────────────
     kernel = np.ones((3, 3), np.uint8)
-    definite_fg = cv2.erode(coarse_mask, kernel, iterations=3)  # uint8, 0/1
+    # iterations=1: zona de transição de 1px (correto para pixel art com bordas nítidas).
+    # Valor maior criava faixa larga onde pixels claros do objeto ficavam semi-transparentes.
+    definite_fg = cv2.erode(coarse_mask, kernel, iterations=1)  # uint8, 0/1
 
     # ── Passo 2: Alpha na zona de transição ──────────────────────────────────
     float_bgr = bgr.astype(np.float32)
@@ -75,6 +77,7 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
     dilated_fg = cv2.dilate(coarse_u8, kernel, iterations=2)
     eroded_fg  = cv2.erode(coarse_u8,  kernel, iterations=2)
     frontier_binary = ((dilated_fg.astype(np.int16) - eroded_fg.astype(np.int16)) > 0)
+    print(f"PASSO 4")
 
     frontier = cv2.dilate(frontier_binary.astype(np.uint8), kernel, iterations=1) > 0
 
@@ -89,10 +92,55 @@ def compute_soft_alpha(bgr, coarse_mask, definite_bg_mask, bg_color):
     return np.clip(final_alpha * 255.0, 0, 255).astype(np.uint8)
 
 
+def clean_white_background(img):
+    """Remove pixels brancos/claros conectados às áreas já transparentes (fundo residual).
+
+    Preserva pixels brancos internos ao personagem que não têm caminho
+    de conectividade até as regiões transparentes do fundo.
+    """
+    alpha = img[:, :, 3]
+    bgr   = img[:, :, :3]
+
+    # 220 cobre tanto os quadrados brancos (~255) quanto cinzas (~230) do xadrez
+    near_white = (bgr[:,:,0] > 220) & (bgr[:,:,1] > 220) & (bgr[:,:,2] > 220)
+    # Espaço navegável: transparente OU branco
+    walkable = ((alpha == 0) | near_white).astype(np.uint8)
+
+    num_labels, labels = cv2.connectedComponents(walkable, connectivity=8)
+
+    # Componentes que contêm pixels já transparentes = fundo
+    bg_labels = set(np.unique(labels[alpha == 0]))
+    bg_labels.discard(0)  # label 0 = pixels não-navegáveis (personagem colorido)
+
+    new_alpha = alpha.copy()
+    for lbl in bg_labels:
+        new_alpha[(labels == lbl) & near_white] = 0
+
+    # Segunda passagem: clusters near-white isolados grandes = buracos de fundo enclosed
+    # (ex.: área entre braço e corpo cercada por pixels coloridos do personagem)
+    # Highlights do personagem são pequenos (<= 150px); buracos de fundo são grandes.
+    still_isolated = near_white & (new_alpha == 255)
+    _, iso_labels = cv2.connectedComponents(still_isolated.astype(np.uint8), connectivity=8)
+    for lbl in range(1, iso_labels.max() + 1):
+        if (iso_labels == lbl).sum() > 150:
+            new_alpha[iso_labels == lbl] = 0
+
+    result = img.copy()
+    result[:, :, 3] = new_alpha
+    return result
+
+
 def remove_background(input_path, output_path):
     img = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
     if img is None:
         print(f"Failed to load {input_path}")
+        return
+
+    # Imagem já tem canal alpha com transparência real → limpa fundo branco residual
+    if img.ndim == 3 and img.shape[2] == 4 and img[:, :, 3].min() < 255:
+        img = clean_white_background(img)
+        cv2.imwrite(output_path, img)
+        print(f"Saved (alpha preserved + cleaned): {os.path.basename(output_path)}")
         return
 
     # Converte para BGRA se necessário
@@ -104,18 +152,20 @@ def remove_background(input_path, output_path):
 
     # ── PASSO 0: Estimativa da cor do fundo ────────────────────────────────
     bg_color = estimate_background_color(bgr)
+    print(f"PASSO 0")
 
     # ── PASSO 1: Máscara Inicial (Flood Fill + Brancos) ──────────────────────────
-    # Criamos uma máscara inicial para "ajudar" o GrabCut
-    mask_init = np.zeros((h, w), np.uint8)
-    
-    # Detecção de fundo branco PURO (mais restrito para não pegar cordões cinzas)
-    pure_white = (bgr[:,:,0] > 248) & (bgr[:,:,1] > 248) & (bgr[:,:,2] > 248)
-    mask_init[pure_white] = cv2.GC_PR_BGD  # Provável Fundo
+    # Inicializa tudo como provável FG — evita que pixels de borda escura (ex.: moldura)
+    # sejam tratados como fundo certo só por estarem fora do center_rect.
+    mask_init = np.full((h, w), cv2.GC_PR_FGD, dtype=np.uint8)
+    print(f"PASSO 1")
 
-    # Flood Fill nas bordas (tolerância menor para não invadir o objeto)
+    # Detecção de fundo branco PURO → provável fundo
+    pure_white = (bgr[:,:,0] > 248) & (bgr[:,:,1] > 248) & (bgr[:,:,2] > 248)
+    mask_init[pure_white] = cv2.GC_PR_BGD
+
+    # Flood Fill nas bordas → fundo certo (tolerância apertada para não invadir objeto)
     temp_mask = np.zeros((h + 2, w + 2), np.uint8)
-    # Tolerância de cor reduzida (de 10 para 4) para ser mais conservador
     diff = (4, 4, 4)
     for x in [0, w-1]:
         for y in range(h):
@@ -125,19 +175,14 @@ def remove_background(input_path, output_path):
         for x in range(w):
             if temp_mask[y+1, x+1] == 0:
                 cv2.floodFill(bgr, temp_mask, (x, y), 255, diff, diff, 4 | cv2.FLOODFILL_MASK_ONLY)
-    
-    bg_mask = temp_mask[1:-1, 1:-1] > 0
-    mask_init[bg_mask] = cv2.GC_BGD  # Fundo com certeza
 
-    # Área central maior como "objeto com certeza" para proteger cordões internos
-    center_rect = (int(w*0.05), int(h*0.05), int(w*0.9), int(h*0.9))
-    cv2.rectangle(mask_init, (center_rect[0], center_rect[1]), 
-                 (center_rect[0]+center_rect[2], center_rect[1]+center_rect[3]), 
-                 cv2.GC_PR_FGD, -1)
+    bg_mask = temp_mask[1:-1, 1:-1] > 0
+    mask_init[bg_mask] = cv2.GC_BGD  # Fundo com certeza (sobrescreve PR_FGD e PR_BGD)
 
     # ── PASSO 2: GrabCut ────────────────────────────────────────────────────────
     bgdModel = np.zeros((1, 65), np.float64)
     fgdModel = np.zeros((1, 65), np.float64)
+    print(f"PASSO 2")
     
     # Rodamos o GrabCut usando a máscara inicial
     cv2.grabCut(bgr, mask_init, None, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
@@ -148,6 +193,7 @@ def remove_background(input_path, output_path):
     # ── PASSO 3: Alpha suave preservando efeitos semi-transparentes ─────────
     kernel = np.ones((3, 3), np.uint8)
     mask_final = cv2.morphologyEx(mask_final, cv2.MORPH_OPEN, kernel, iterations=1)
+    print(f"PASSO 3")
 
     alpha = compute_soft_alpha(bgr, mask_final, bg_mask, bg_color)
 
@@ -167,6 +213,8 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     files = [f for f in os.listdir(input_dir) if f.endswith('.png')]
+
+    print("arquivos: ", files)
     for fname in files:
         inp = os.path.join(input_dir, fname)
         out = os.path.join(output_dir, fname)
